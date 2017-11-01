@@ -23,6 +23,7 @@ import io.fabric8.kubernetes.api.model.PodSpec;
 import javax.inject.Named;
 import org.eclipse.che.api.workspace.server.spi.InfrastructureException;
 import org.eclipse.che.api.workspace.server.spi.InternalEnvironment;
+import org.eclipse.che.api.workspace.server.spi.InternalInfrastructureException;
 import org.eclipse.che.workspace.infrastructure.openshift.environment.OpenShiftEnvironment;
 
 /**
@@ -45,17 +46,20 @@ public class CommonPVCStrategy implements WorkspacePVCStrategy {
   private final String pvcQuantity;
   private final String pvcAccessMode;
   private final String projectsPath;
+  private final PVCHelper pvcHelper;
 
   @Inject
   public CommonPVCStrategy(
       @Named("che.infra.openshift.pvc.name") String pvcName,
       @Named("che.infra.openshift.pvc.quantity") String pvcQuantity,
       @Named("che.infra.openshift.pvc.access_mode") String pvcAccessMode,
-      @Named("che.workspace.projects.storage") String projectFolderPath) {
+      @Named("che.workspace.projects.storage") String projectFolderPath,
+      PVCHelper pvcHelper) {
     this.pvcName = pvcName;
     this.pvcQuantity = pvcQuantity;
     this.pvcAccessMode = pvcAccessMode;
     this.projectsPath = projectFolderPath;
+    this.pvcHelper = pvcHelper;
   }
 
   @Override
@@ -85,7 +89,13 @@ public class CommonPVCStrategy implements WorkspacePVCStrategy {
   }
 
   @Override
-  public void cleanup(String workspaceId) {
+  public void cleanup(String workspaceId) throws InfrastructureException {
+    try {
+      pvcHelper.cleanup();
+    } catch (InternalInfrastructureException e) {
+      e.printStackTrace();
+    }
+
     // TODO implement https://github.com/eclipse/che/issues/6767
   }
 }
