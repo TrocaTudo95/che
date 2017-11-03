@@ -69,7 +69,7 @@ public class CommonPVCStrategyTest {
   @BeforeMethod
   public void setup() throws Exception {
     commonPVCStrategy =
-        new CommonPVCStrategy(PVC_NAME, PVC_QUANTITY, PVC_ACCESS_MODE, PROJECT_FOLDER_PATH, null);
+        new CommonPVCStrategy(null, PVC_NAME, PVC_QUANTITY, PVC_ACCESS_MODE, PROJECT_FOLDER_PATH, null);
     final InternalMachineConfig machine = mock(InternalMachineConfig.class);
     when(machine.getServers())
         .thenReturn(singletonMap(SERVER_WS_AGENT_HTTP_REFERENCE, mock(ServerConfig.class)));

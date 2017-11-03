@@ -1,7 +1,6 @@
 package org.eclipse.che.workspace.infrastructure.openshift.project;
 
 import static java.lang.System.arraycopy;
-import static java.util.Arrays.stream;
 import static java.util.Collections.singletonMap;
 import static org.eclipse.che.workspace.infrastructure.openshift.project.OpenShiftObjectUtil.newVolume;
 import static org.eclipse.che.workspace.infrastructure.openshift.project.OpenShiftObjectUtil.newVolumeMount;
@@ -13,6 +12,7 @@ import io.fabric8.kubernetes.api.model.PodBuilder;
 import io.fabric8.kubernetes.api.model.Quantity;
 import io.fabric8.openshift.client.OpenShiftClient;
 import java.util.Arrays;
+import java.util.regex.Pattern;
 import javax.inject.Inject;
 import javax.inject.Named;
 import javax.inject.Singleton;
@@ -39,6 +39,9 @@ import org.slf4j.LoggerFactory;
 public class PVCHelper {
 
   private static final Logger LOG = LoggerFactory.getLogger(PVCHelper.class);
+
+  private Pattern t =
+      Pattern.compile("[a-z0-9]([-a-z0-9]*[a-z0-9])?(\\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*");
 
   private static final String POD_PHASE_SUCCEEDED = "Succeeded";
   private static final String POD_PHASE_FAILED = "Failed";
@@ -73,14 +76,12 @@ public class PVCHelper {
   }
 
   private boolean createJobPod(String projectNamespace, String workspaceId) {
-    final String[] allDirs = new String[] {workspaceId + projectFolderPath};
-    final String[] jobCommand = getCommand(projectFolderPath, allDirs);
-    LOG.info("Executing command {} in PVC {} for {} dirs", jobCommand[0], pvcName, allDirs.length);
-    final String podName = "pvc_cleaner_pod_" + workspaceId;
-
+    final String[] jobCommand = getCommand(workspaceId);
+    LOG.info("Executing command {} in PVC {} for {} dirs", jobCommand[0], pvcName, workspaceId);
+    final String cleanerName = "pvc-cleaner-" + workspaceId;
     final Container container =
         new ContainerBuilder()
-            .withName(podName)
+            .withName(cleanerName)
             .withImage(jobImage)
             .withImagePullPolicy(PULL_POLICY)
             .withNewSecurityContext()
@@ -95,7 +96,7 @@ public class PVCHelper {
     final Pod podSpec =
         new PodBuilder()
             .withNewMetadata()
-            .withName(podName)
+            .withName(cleanerName)
             .endMetadata()
             .withNewSpec()
             .withContainers(container)
@@ -108,7 +109,7 @@ public class PVCHelper {
       openShiftClient.pods().inNamespace(projectNamespace).create(podSpec);
       while (true) {
         final Pod pod =
-            openShiftClient.pods().inNamespace(projectNamespace).withName(podName).get();
+            openShiftClient.pods().inNamespace(projectNamespace).withName(cleanerName).get();
         final String phase = pod.getStatus().getPhase();
         switch (phase) {
           case POD_PHASE_FAILED:
@@ -127,12 +128,10 @@ public class PVCHelper {
     return false;
   }
 
-  private String[] getCommand(String mountPath, String... dirs) {
-    final String[] command = RM_DIR_WORKSPACE_COMMAND;
-    final String[] dirsWithPath = stream(dirs).map(dir -> mountPath + dir).toArray(String[]::new);
-    final String[] fullCommand = new String[command.length + dirsWithPath.length];
-    arraycopy(command, 0, fullCommand, 0, command.length);
-    arraycopy(dirsWithPath, 0, fullCommand, command.length, dirsWithPath.length);
+  private static String[] getCommand(String mountPath) {
+    final String[] fullCommand = new String[RM_DIR_WORKSPACE_COMMAND.length + 1];
+    arraycopy(RM_DIR_WORKSPACE_COMMAND, 0, fullCommand, 0, RM_DIR_WORKSPACE_COMMAND.length);
+    arraycopy(new String[] {mountPath}, 0, fullCommand, RM_DIR_WORKSPACE_COMMAND.length, 1);
     return fullCommand;
   }
 }

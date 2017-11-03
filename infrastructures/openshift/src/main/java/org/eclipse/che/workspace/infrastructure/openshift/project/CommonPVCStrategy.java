@@ -24,6 +24,7 @@ import javax.inject.Named;
 import org.eclipse.che.api.workspace.server.spi.InfrastructureException;
 import org.eclipse.che.api.workspace.server.spi.InternalEnvironment;
 import org.eclipse.che.api.workspace.server.spi.InternalInfrastructureException;
+import org.eclipse.che.commons.annotation.Nullable;
 import org.eclipse.che.workspace.infrastructure.openshift.environment.OpenShiftEnvironment;
 
 /**
@@ -42,19 +43,22 @@ public class CommonPVCStrategy implements WorkspacePVCStrategy {
 
   public static final String COMMON_STRATEGY = "common";
 
-  private final String pvcName;
+  private final String projectName;
   private final String pvcQuantity;
+  private final String pvcName;
   private final String pvcAccessMode;
   private final String projectsPath;
   private final PVCHelper pvcHelper;
 
   @Inject
   public CommonPVCStrategy(
+      @Nullable @Named("che.infra.openshift.project") String projectName,
       @Named("che.infra.openshift.pvc.name") String pvcName,
       @Named("che.infra.openshift.pvc.quantity") String pvcQuantity,
       @Named("che.infra.openshift.pvc.access_mode") String pvcAccessMode,
       @Named("che.workspace.projects.storage") String projectFolderPath,
       PVCHelper pvcHelper) {
+    this.projectName = projectName;
     this.pvcName = pvcName;
     this.pvcQuantity = pvcQuantity;
     this.pvcAccessMode = pvcAccessMode;
@@ -91,7 +95,7 @@ public class CommonPVCStrategy implements WorkspacePVCStrategy {
   @Override
   public void cleanup(String workspaceId) throws InfrastructureException {
     try {
-      pvcHelper.cleanup(workspaceId, workspaceId);
+      pvcHelper.cleanup(projectName, workspaceId);
     } catch (InternalInfrastructureException ignore) {
     }
   }
