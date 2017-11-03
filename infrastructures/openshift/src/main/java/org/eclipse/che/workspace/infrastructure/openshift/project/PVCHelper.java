@@ -1,37 +1,49 @@
 package org.eclipse.che.workspace.infrastructure.openshift.project;
 
+import static java.lang.System.arraycopy;
+import static java.util.Arrays.stream;
 import static java.util.Collections.singletonMap;
+import static org.eclipse.che.workspace.infrastructure.openshift.project.OpenShiftObjectUtil.newVolume;
+import static org.eclipse.che.workspace.infrastructure.openshift.project.OpenShiftObjectUtil.newVolumeMount;
 
 import io.fabric8.kubernetes.api.model.Container;
 import io.fabric8.kubernetes.api.model.ContainerBuilder;
-import io.fabric8.kubernetes.api.model.PersistentVolumeClaimVolumeSource;
-import io.fabric8.kubernetes.api.model.PersistentVolumeClaimVolumeSourceBuilder;
 import io.fabric8.kubernetes.api.model.Pod;
 import io.fabric8.kubernetes.api.model.PodBuilder;
 import io.fabric8.kubernetes.api.model.Quantity;
-import io.fabric8.kubernetes.api.model.Volume;
-import io.fabric8.kubernetes.api.model.VolumeBuilder;
-import io.fabric8.kubernetes.api.model.VolumeMount;
-import io.fabric8.kubernetes.api.model.VolumeMountBuilder;
 import io.fabric8.openshift.client.OpenShiftClient;
-import java.io.IOException;
-import java.util.ArrayList;
 import java.util.Arrays;
-import java.util.List;
 import javax.inject.Inject;
 import javax.inject.Named;
+import javax.inject.Singleton;
 import org.eclipse.che.api.workspace.server.spi.InternalInfrastructureException;
 import org.eclipse.che.workspace.infrastructure.openshift.OpenShiftClientFactory;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-/** @author Anton Korneta */
+/**
+ * Helper class for executing simple commands in a Persistent Volume on Openshift.
+ *
+ * <p>Creates a short-lived Pod using a CentOS image which mounts a specified PVC and executes a
+ * command (either {@code mkdir -p <path>} or {@code rm -rf <path}). Reports back whether the pod
+ * succeeded or failed. Supports multiple paths for one command.
+ *
+ * <p>For mkdir commands, an in-memory list of created workspaces is stored and used to avoid
+ * calling mkdir unnecessarily. However, this list is not persisted, so dir creation is not tracked
+ * between restarts.
+ *
+ * @author amisevsk
+ * @author Anton Korneta
+ */
+@Singleton
 public class PVCHelper {
 
   private static final Logger LOG = LoggerFactory.getLogger(PVCHelper.class);
 
   private static final String POD_PHASE_SUCCEEDED = "Succeeded";
   private static final String POD_PHASE_FAILED = "Failed";
+  private static final String PULL_POLICY = "IfNotPresent";
+  private static final String RESTART_POLICY = "Never";
 
   private final String pvcName;
   private final String projectFolderPath;
@@ -57,39 +69,25 @@ public class PVCHelper {
 
   public void cleanup(String openShiftProject, String workspaceId)
       throws InternalInfrastructureException {
-    try {
-      createJobPod(openShiftProject, workspaceId);
-    } catch (IOException e) {
-      throw new InternalInfrastructureException("Failed to cleanup workspace data folder");
-    }
+    createJobPod(openShiftProject, workspaceId);
   }
 
-  protected boolean createJobPod(String projectNamespace, String workspaceId) throws IOException {
-    final List<String> allDirs = new ArrayList<>();
-    allDirs.add(workspaceId + projectFolderPath);
-    final String[] allDirsArray = allDirs.toArray(new String[allDirs.size()]);
-
-    final VolumeMount vm =
-        new VolumeMountBuilder().withMountPath(projectFolderPath).withName(pvcName).build();
-    final PersistentVolumeClaimVolumeSource pvcs =
-        new PersistentVolumeClaimVolumeSourceBuilder().withClaimName(pvcName).build();
-    final Volume volume =
-        new VolumeBuilder().withPersistentVolumeClaim(pvcs).withName(pvcName).build();
-
-    final String[] jobCommand = getCommand(projectFolderPath, allDirsArray);
-    LOG.info("Executing command {} in PVC {} for {} dirs", jobCommand[0], pvcName, allDirs.size());
+  private boolean createJobPod(String projectNamespace, String workspaceId) {
+    final String[] allDirs = new String[] {workspaceId + projectFolderPath};
+    final String[] jobCommand = getCommand(projectFolderPath, allDirs);
+    LOG.info("Executing command {} in PVC {} for {} dirs", jobCommand[0], pvcName, allDirs.length);
     final String podName = "pvc_cleaner_pod_" + workspaceId;
 
     final Container container =
         new ContainerBuilder()
             .withName(podName)
             .withImage(jobImage)
-            .withImagePullPolicy("IfNotPresent")
+            .withImagePullPolicy(PULL_POLICY)
             .withNewSecurityContext()
             .withPrivileged(false)
             .endSecurityContext()
             .withCommand(jobCommand)
-            .withVolumeMounts(vm)
+            .withVolumeMounts(newVolumeMount(pvcName, projectFolderPath, null))
             .withNewResources()
             .withLimits(singletonMap("memory", new Quantity(jobMemoryLimit)))
             .endResources()
@@ -101,16 +99,17 @@ public class PVCHelper {
             .endMetadata()
             .withNewSpec()
             .withContainers(container)
-            .withVolumes(volume)
-            .withRestartPolicy("Never")
+            .withVolumes(newVolume(pvcName, pvcName))
+            .withRestartPolicy(RESTART_POLICY)
             .endSpec()
             .build();
 
     try (OpenShiftClient openShiftClient = clientFactory.create()) {
       openShiftClient.pods().inNamespace(projectNamespace).create(podSpec);
       while (true) {
-        Pod pod = openShiftClient.pods().inNamespace(projectNamespace).withName(podName).get();
-        String phase = pod.getStatus().getPhase();
+        final Pod pod =
+            openShiftClient.pods().inNamespace(projectNamespace).withName(podName).get();
+        final String phase = pod.getStatus().getPhase();
         switch (phase) {
           case POD_PHASE_FAILED:
             LOG.info("Pod command {} failed", Arrays.toString(jobCommand));
@@ -129,13 +128,11 @@ public class PVCHelper {
   }
 
   private String[] getCommand(String mountPath, String... dirs) {
-    String[] command = RM_DIR_WORKSPACE_COMMAND;
-    String[] dirsWithPath = Arrays.stream(dirs).map(dir -> mountPath + dir).toArray(String[]::new);
-
-    String[] fullCommand = new String[command.length + dirsWithPath.length];
-
-    System.arraycopy(command, 0, fullCommand, 0, command.length);
-    System.arraycopy(dirsWithPath, 0, fullCommand, command.length, dirsWithPath.length);
+    final String[] command = RM_DIR_WORKSPACE_COMMAND;
+    final String[] dirsWithPath = stream(dirs).map(dir -> mountPath + dir).toArray(String[]::new);
+    final String[] fullCommand = new String[command.length + dirsWithPath.length];
+    arraycopy(command, 0, fullCommand, 0, command.length);
+    arraycopy(dirsWithPath, 0, fullCommand, command.length, dirsWithPath.length);
     return fullCommand;
   }
 }

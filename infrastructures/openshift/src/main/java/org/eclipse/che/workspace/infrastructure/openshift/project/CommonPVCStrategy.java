@@ -91,11 +91,8 @@ public class CommonPVCStrategy implements WorkspacePVCStrategy {
   @Override
   public void cleanup(String workspaceId) throws InfrastructureException {
     try {
-      pvcHelper.cleanup();
-    } catch (InternalInfrastructureException e) {
-      e.printStackTrace();
+      pvcHelper.cleanup(workspaceId, workspaceId);
+    } catch (InternalInfrastructureException ignore) {
     }
-
-    // TODO implement https://github.com/eclipse/che/issues/6767
   }
 }
